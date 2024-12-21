@@ -24,6 +24,7 @@
   <img src="imgs/updated_reverse_website.png" alt="forward_model" width="1000">
 </p>
 
-
-Coming Soon
+<p align="center">
+  <img src="imgs/img_543_gif.gif" alt="Denoising Gif" width="1000">
+</p>
 
