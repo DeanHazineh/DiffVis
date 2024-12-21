@@ -1,5 +1,4 @@
-<h1 align="center">Grayscale to Hyperspectral at Any Resolution Using A Phase-Only Lens</h1>
-<h1 align="center">Code Coming Soon</h1>
+<h1 align="center">Grayscale to Hyperspectral at Any Resolution Using A Phase-Only Lens (page in development 12/24)</h1>
 
 <p align="center">
   <a href="https://deanhazineh.github.io/publications/DiffVis/diffvis_home.html">
