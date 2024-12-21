@@ -1,0 +1,14 @@
+pytorch_lightning
+matplotlib
+einops
+omegaconf
+numpy
+natsort
+tqdm
+pandas
+opencv-python
+scipy
+transformers
+kornia
+h5py
+OpenEXR
