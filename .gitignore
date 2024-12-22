@@ -3,5 +3,5 @@
 **out
 build/*
 
-Run/data_files/*.pickle
-Run/DFlat/*
+scripts/data_files/*.pickle
+scripts/DFlat/*
