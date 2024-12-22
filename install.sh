@@ -9,21 +9,30 @@ fi
 # Check if the conda environment exists
 if conda env list | grep -q "^diffvis "; then
     echo "Activating existing Conda environment: diffvis"
-    source activate diffvis
+    conda activate diffvis
 else
     echo "Creating Conda environment: diffvis"
     conda create -y -n diffvis python=3.11
-    source activate diffvis
+    conda activate diffvis
 fi
 
 # Export PATH for the active Conda environment
 export PATH="$(conda info --base)/envs/diffvis/bin:$PATH"
 
-# Install dependencies
+# Install PyTorch with CUDA support
+echo "Installing PyTorch with GPU support..."
+# Replace 'cu118' with the appropriate CUDA version if needed
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+
+# Install other dependencies
+echo "Installing additional dependencies..."
 pip install -r requirements.txt
 python install -e .
 
 # Install DFlat package
+echo "Installing DFlat package..."
 cd DFlat
 pip install .
 cd ..
+
+echo "Installation complete."

@@ -1,3 +1,7 @@
 **__pycache__
 **diffvis.egg-info
 **out
+build/*
+
+Run/data_files/*.pickle
+Run/DFlat/*
