@@ -12,3 +12,4 @@ transformers
 kornia
 h5py
 OpenEXR
+ipykernel

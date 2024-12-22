@@ -21,8 +21,7 @@ export PATH="$(conda info --base)/envs/diffvis/bin:$PATH"
 
 # Install PyTorch with CUDA support
 echo "Installing PyTorch with GPU support..."
-# Replace 'cu118' with the appropriate CUDA version if needed
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+pip install torch torchvision torchaudio
 
 # Install other dependencies
 echo "Installing additional dependencies..."
