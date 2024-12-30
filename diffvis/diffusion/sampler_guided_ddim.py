@@ -1185,445 +1185,6 @@ class DIFFSSI_CASSI_Large(DDIM_Sampler):
         return cps[:, :, None, None, None].to(torch.float32)
 
 
-class DiffSSIV2(DDIM_Sampler):
-    def __init__(
-        self,
-        diffusion_model,
-        n_steps,
-        ddim_scheme="uniform",
-        ddim_eta=1.0,
-        gtstart=999,
-        gtend=0,
-        gloop=10,
-        gscale=1,
-        kernel=None,
-        kernel_path=None,
-        kernel_key=None,
-        mode="gs",
-        patch_normalize=True,
-        patch_scale_guidance=True,
-        sub_crop=False,
-        lam=None,
-        guidance_loss="L2",
-    ):
-        super().__init__(diffusion_model, n_steps, ddim_scheme, ddim_eta)
-        assert mode in ["rgb", "gs"], "mode must be 'rgb' or 'gs'."
-        if kernel_path is not None:
-            assert kernel is None, "If kernel_path is provided, do not pass in a kernel"
-            assert (
-                kernel_key is not None
-            ), "dictionary key name corresponding to kernel must be provided."
-            with open(kernel_path, "rb") as f:
-                data = pickle.load(f)
-                kernel = data[kernel_key]
-                kernel = kernel[None] / np.max(kernel)
-        if kernel is not None:
-            assert len(kernel.shape) == 4, "Expected kernel of shape [1, C, H, W]"
-            self.kernel = torch.tensor(kernel, dtype=torch.float32, device="cuda")
-        else:
-            self.kernel = None
-        if mode == "rgb":
-            assert lam is not None, "Lambda must be provided for rgb mode."
-
-        self.lam = lam
-        self.sub_crop = sub_crop
-        self.mode = mode
-        self.gloop = gloop
-        self.gscale = gscale
-        self.gtstart = gtstart
-        self.gtend = gtend
-        self.variance_n = None
-        self.batch_size = None
-        self.patch_normalize = patch_normalize
-        self.patch_scale_guidance = patch_scale_guidance
-        self.orig_clamp = True
-        self.guidance_loss = guidance_loss
-
-    def sample(
-        self,
-        measurement,
-        variance_n=1,
-        split_n=None,
-        return_intermediate=False,
-        x_start=None,
-        patch_size=[64, 64],
-        stride_size=None,
-        use_guidance=True,
-        xcond=None,
-        rescale_return=True,
-        boundary_crop=0,
-        diffusion_batching=None,
-    ):
-        assert len(measurement.shape) == 3, "measurement should be rank 3"
-        if not torch.is_tensor(measurement):
-            measurement = torch.tensor(measurement)
-        measurement = measurement.to(dtype=torch.float32, device="cuda")
-        self.measurement = measurement
-
-        # Get a boundary crop mask for large image divisions
-        H, W = measurement.shape[-2:]
-        self.subcrop_mask = torch.zeros((1, H, W), dtype=torch.float32, device="cuda")
-        self.subcrop_mask[
-            :,
-            boundary_crop : H - boundary_crop,
-            boundary_crop : W - boundary_crop,
-        ] = 1.0
-
-        split_n = variance_n if split_n is None else int(split_n)
-        assert len(patch_size) == 2, "patchsize should be [h, w]"
-        h, w = measurement.shape[-2:]
-        ch = self.diffusion_model._seed_channels
-        sh, sw = patch_size
-        assert (
-            h % sh == 0 and w % sw == 0
-        ), "Height and width must be perfectly divisible by sh and sw"
-
-        ccond, ccond_pn, g = self._forward_img2patch(
-            measurement, patch_size, stride_size
-        )
-        batch_size = ccond.shape[0]  # number patches
-
-        if x_start is None:
-            x_start = torch.randn(
-                (
-                    variance_n * batch_size,
-                    ch,
-                    *patch_size,
-                ),
-                dtype=torch.float32,
-                device="cuda",
-            )
-        else:
-            x_start = x_start.to(dtype=torch.float32, device="cuda")
-
-        # ccond = self.diffusion_model.ccond_stage_model(ccond)
-        ccond = self.diffusion_model.reshape_batched_variance(ccond, variance_n)
-        ccond_pn = self.diffusion_model.reshape_batched_variance(ccond_pn, variance_n)
-
-        if xcond is not None:
-            xcond = xcond.to(dtype=torch.float32, device="cuda")[None]
-            xcond = (xcond * 2) - 1
-            xcond = self.diffusion_model.xcond_stage_model(xcond).detach()
-            xcond = torch.tile(xcond, [ccond.shape[0], 1])
-
-        self.batch_size = batch_size
-        self.g = g
-        self.patch_size = patch_size
-        self.stride_size = stride_size
-        self.variance_n = split_n
-
-        # Allow splitting of variance sampled draws into subgroups
-        rep_calc = variance_n // split_n
-        total_steps = self.n_steps if return_intermediate else 1
-        imgs = torch.zeros((total_steps, variance_n, ch, h, w), device="cpu")
-        x0s = torch.zeros((total_steps, variance_n, ch, h, w), device="cpu")
-        self.hold_losses = []
-        for repi in range(rep_calc):
-            ilow = repi * split_n * batch_size
-            ihigh = (repi + 1) * split_n * batch_size
-            if diffusion_batching is None:
-                self.diffusion_batching = int(ihigh - ilow)
-            else:
-                self.diffusion_batching = int(diffusion_batching)
-
-            im = x_start[ilow:ihigh]
-            use_ccond = ccond[ilow:ihigh]
-            use_ccond_pn = ccond_pn[ilow:ihigh]
-            use_xcond = xcond[ilow:ihigh] if xcond is not None else None
-            progress_bar = tqdm(
-                zip(reversed(range(self.n_steps)), reversed(self.ddim_times)),
-                total=self.n_steps,
-                desc="",
-            )
-            step_idx = 0
-
-            for idx, i in progress_bar:
-                im, x0 = self.p_sample(
-                    im,
-                    torch.full((im.shape[0],), i, dtype=torch.long, device="cuda"),
-                    torch.full((im.shape[0],), idx, dtype=torch.long, device="cuda"),
-                    use_ccond,
-                    use_ccond_pn,
-                    use_xcond,
-                    use_guidance,
-                )
-
-                if (i == 0) or return_intermediate:
-                    im_ = im.clone().detach()
-                    x0_ = x0.clone().detach()
-
-                    ## Apply LSQ patch scaling
-                    if rescale_return:
-                        _, im_ = self._guidance_step(im_)
-                        _, x0_ = self._guidance_step(x0_)
-
-                    im_ = self._reverse_patch2img(im_, split_n, batch_size)
-                    x0_ = self._reverse_patch2img(x0_, split_n, batch_size)
-
-                    imgs[step_idx, split_n * repi : split_n * (repi + 1)] = im_.cpu()
-                    x0s[step_idx, split_n * repi : split_n * (repi + 1)] = x0_.cpu()
-                    step_idx += 1
-
-                progress_bar.set_description(f"Index {idx}, Time: {i}")
-
-        np_hold_losses = np.concatenate(self.hold_losses, axis=1)
-        print(np_hold_losses.shape)
-        print(variance_n // split_n, split_n)
-        np_hold_losses = rearrange(
-            np_hold_losses,
-            "g (t s) -> (g s) t",
-            g=split_n,
-            s=variance_n // split_n,
-            # np_hold_losses, "(g t) s -> t (g s)", g=variance_n // split_n, s=split_n
-        )
-        return imgs.numpy(), x0s.numpy(), np_hold_losses
-
-    def p_sample(self, x_t, t, ti, ccond, ccond_pn, xcond, use_guidance):
-        ### Collect coefficients
-        sqrt_one_minus_alphas_cumprod_t = extract(
-            self.sqrt_one_minus_alphas_cumprod, ti, x_t.shape
-        )
-        sqrt_recip_alphas_cumprod_t = extract(
-            self.sqrt_recip_alphas_cumprod, ti, x_t.shape
-        )
-        sqrt_alpha_cumprod_prev_t = torch.sqrt(
-            extract(self.alphas_cumprod_prev, ti, x_t.shape)
-        )
-        ddim_coeff_t = extract(self.ddim_coeff, ti, x_t.shape)
-        ddim_sigma_t = extract(self.ddim_sigma, ti, x_t.shape)
-
-        ### Get noise/score
-        with torch.no_grad():
-            ccond_ = ccond_pn if self.patch_normalize else ccond
-            model_output = self.batched_model_inference(x_t, ccond_, t, xcond)
-
-        if self.prediction_type == "epsilon":
-            epsilon = model_output
-        elif self.prediction_type == "start_x":
-            sqrt_alphas_cumprod_t = torch.sqrt(
-                extract(self.alphas_cumprod, ti, x_t.shape)
-            )
-            epsilon = (
-                x_t - model_output * sqrt_alphas_cumprod_t
-            ) / sqrt_one_minus_alphas_cumprod_t
-        else:
-            raise ValueError("Unsupported model prediction type.")
-
-        xtp = x_t.clone()
-        time = t.flatten()[0]
-        if use_guidance and time <= self.gtstart and time >= self.gtend:
-            use_gloop = self.gloop
-            xtp.requires_grad_(True)
-
-            for _ in range(use_gloop):
-                if xtp.grad is not None:
-                    xtp.grad.zero_()
-
-                ccond_ = ccond_pn if self.patch_normalize else ccond
-                model_output = self.batched_model_inference(xtp, ccond_, t, xcond)
-
-                if self.prediction_type == "epsilon":
-                    x0 = (
-                        xtp - sqrt_one_minus_alphas_cumprod_t * model_output
-                    ) * sqrt_recip_alphas_cumprod_t
-                elif self.prediction_type == "start_x":
-                    x0 = model_output
-
-                # losses, _ = self._guidance_step(x0)
-                losses, _ = checkpoint(self._guidance_step, x0)
-                loss = torch.sum(losses)
-                loss.backward()
-
-                with torch.no_grad():
-                    xtp -= self.gscale * xtp.grad / torch.norm(xtp.grad)
-                    xtp = xtp.detach().requires_grad_(True)
-
-                torch.cuda.empty_cache()
-
-            xtp = xtp.detach()
-
-        ### Get x0hat and Compute DDIM Step
-        pred_xstart = (
-            xtp - sqrt_one_minus_alphas_cumprod_t * epsilon
-        ) * sqrt_recip_alphas_cumprod_t
-        pred_xstart = torch.clamp(pred_xstart, -1, 1)
-
-        nonzero_mask = (1 - (t == 0).float()).reshape(
-            x_t.shape[0], *((1,) * (len(x_t.shape) - 1))
-        )
-        noise = torch.randn_like(x_t)
-        xtm1 = (
-            sqrt_alpha_cumprod_prev_t * pred_xstart
-            + ddim_coeff_t * epsilon
-            + nonzero_mask * ddim_sigma_t * noise
-        )
-
-        # Save the projection loss for reference
-        losses, _ = self._guidance_step(pred_xstart)
-        self.hold_losses.append(losses[:, None].detach().cpu().numpy())
-        return xtm1, pred_xstart
-
-    def batched_model_inference(self, x_t, ccond, t, xcond):
-        b = self.diffusion_batching
-        n = x_t.shape[0]
-        outputs = []
-
-        for i in range(0, n, b):
-            end = min(i + b, n)
-            batch_x_t = x_t[i:end]
-            batch_ccond = ccond[i:end]
-            batch_t = t[i:end]
-            batch_xcond = xcond[i:end] if xcond is not None else None
-
-            batch_input = torch.cat((batch_x_t, batch_ccond), dim=1)
-            batch_output = self.diffusion_model.model(
-                batch_input, batch_t, context=batch_xcond
-            )
-
-            outputs.append(batch_output)
-
-        return torch.cat(outputs, dim=0)
-
-    def _forward_img2patch(self, ccond, patch_size, stride_size):
-        ccond = ccond / torch.amax(ccond)
-        ccond, g = split_patches(ccond, patch_size, stride_size)
-
-        ccond_pn = ccond / torch.amax(ccond, axis=(-1, -2, -3), keepdim=True)
-        ccond_pn = (ccond_pn * 2) - 1
-        ccond = (ccond * 2) - 1
-
-        return ccond, ccond_pn, g
-
-    def _reverse_patch2img(self, hsi, v, b):
-        # hsi = rearrange(hsi, "(v b) c h w -> b v c h w", v=v, b=b)
-        hsi = combine_patches(hsi, self.g, self.patch_size, self.stride_size)
-        # if self.orig_clamp:
-        #     hsi = torch.clamp(hsi, -1, 1)
-        # else:
-        #     hsi = torch.clamp(hsi, -1, 1e3)
-        # hsi = (hsi + 1) / 2
-        # hsi = hsi / torch.amax(hsi, axis=(-1, -2, -3), keepdim=True)
-        return hsi
-
-    def _guidance_step(self, x0):
-        measurement = self.measurement * self.subcrop_mask[None]
-        x0 = rearrange(
-            x0, "(v b) c h w -> b v c h w", v=self.variance_n, b=self.batch_size
-        )
-        x0 = torch.clamp(x0, -1, 1)
-        x0 = (x0 + 1) / 2
-
-        if self.patch_normalize:
-            # x0 = self._patch_normalize(x0)
-            x0 = checkpoint(self._patch_normalize, x0)
-
-        ###
-        g = self.g
-        ch = 3 if self.mode == "rgb" else 1
-        py, px = self.patch_size[-2:]
-        if self.kernel is not None:
-            ys, xs = self.kernel.shape[-2] // 2, self.kernel.shape[-1] // 2
-        else:
-            ys, xs = 0, 0
-        fh = measurement.shape[-2] + 2 * ys
-        fw = measurement.shape[-1] + 2 * xs
-        meas = torch.zeros(
-            size=(x0.shape[1], ch, fh, fw), dtype=torch.float32, device="cuda"
-        )
-
-        for pi in range(x0.shape[0]):
-            if self.kernel is not None:
-                out = general_convolve(x0[pi], self.kernel, rfft=True, mode="full")
-            else:
-                out = x0[pi]
-
-            if self.mode == "gs":
-                out = torch.sum(out, axis=-3, keepdim=True)
-            elif self.mode == "rgb":
-                out = hsi_to_rgb(out, self.lam, tensor_ordering=True, normalize=False)
-
-            ri, ci = divmod(pi, g[-1])
-            meas[
-                :,
-                :,
-                ri * py : (ri * py + py + 2 * ys),
-                ci * px : (ci * px + px + 2 * xs),
-            ] = (
-                meas[
-                    :,
-                    :,
-                    ri * py : (ri * py + py + 2 * ys),
-                    ci * px : (ci * px + px + 2 * xs),
-                ]
-                + out
-            )
-
-        meas = meas[:, :, ys:-ys, xs:-xs] if self.kernel is not None else meas
-        meas = meas * self.subcrop_mask[None]
-
-        if not self.patch_normalize:
-            # TODO: Should swap this to mean
-            meas = meas / torch.amax(meas, dim=(-1, -2, -3), keepdim=True)
-            measurement = measurement / torch.max(measurement)
-
-        if self.guidance_loss == "L2":
-            losses = torch.sum((measurement - meas) ** 2, axis=(-1, -2, -3))
-        elif self.guidance_loss == "L1":
-            losses = torch.sum(torch.abs(measurement - meas), axis=(-1, -2, -3))
-        else:
-            raise ValueError("unknown guidance loss ")
-
-        return losses, x0
-
-    def _patch_normalize(self, x0):
-        g = self.g
-        measurement = self.measurement * self.subcrop_mask
-        ch = 3 if self.mode == "rgb" else 1
-        py, px = self.patch_size[-2:]
-
-        if self.kernel is not None:
-            ys, xs = self.kernel.shape[-2] // 2, self.kernel.shape[-1] // 2
-        else:
-            ys, xs = 0, 0
-        fh = measurement.shape[-2] + 2 * ys
-        fw = measurement.shape[-1] + 2 * xs
-        A = torch.zeros(
-            size=(*x0.shape[0:2], ch, fh, fw), dtype=torch.float32, device="cuda"
-        )
-
-        for pi in range(x0.shape[0]):
-            if self.kernel is not None:
-                out = general_convolve(x0[pi], self.kernel, rfft=True, mode="full")
-            else:
-                out = x0[pi]
-
-            if self.mode == "gs":
-                out = torch.sum(out, axis=-3, keepdim=True)
-            elif self.mode == "rgb":
-                out = hsi_to_rgb(out, self.lam, tensor_ordering=True, normalize=False)
-
-            ri, ci = divmod(pi, g[-1])
-            A[
-                pi,
-                :,
-                :,
-                ri * py : (ri * py + py + 2 * ys),
-                ci * px : (ci * px + px + 2 * xs),
-            ] = out
-        A = A[:, :, :, ys:-ys, xs:-xs] if self.kernel is not None else A
-        A = A * self.subcrop_mask
-
-        cps = []
-        for vi in range(A.shape[1]):
-            Ai = A[:, vi].reshape(x0.shape[0], -1).T
-            cp = torch.inverse(Ai.T @ Ai) @ Ai.T @ measurement.flatten()
-            cps.append(cp)
-        cps = torch.stack(cps).T
-
-        x0 = x0 * cps[:, :, None, None, None].to(torch.float32)
-        return x0
-
-
 class DiffSSI_Large(DDIM_Sampler):
     def __init__(
         self,
@@ -2133,7 +1694,7 @@ class DiffSSI(DDIM_Sampler):
         sigma_loss=1.0,
     ):
         super().__init__(diffusion_model, n_steps, ddim_scheme, ddim_eta)
-        assert mode in ["rgb", "gs"], "mode must be 'rgb' or 'gs'."
+        assert mode in ["rgb", "rgb3", "gs"], "mode must be 'rgb', 'rgb3', or 'gs'."
         if kernel_path is not None:
             assert kernel is None, "If kernel_path is provided, do not pass in a kernel"
             assert (
@@ -2148,8 +1709,8 @@ class DiffSSI(DDIM_Sampler):
             self.kernel = torch.tensor(kernel, dtype=torch.float32, device="cuda")
         else:
             self.kernel = None
-        if mode == "rgb":
-            assert lam is not None, "Lambda must be provided for rgb mode."
+        if mode in ["rgb", "rgb3"]:
+            assert lam is not None, "Lambda must be provided for rgb photosensors."
 
         self.lam = lam
         self.sub_crop = sub_crop
@@ -2470,7 +2031,14 @@ class DiffSSI(DDIM_Sampler):
                 if self.mode == "gs":
                     Ai = torch.sum(Ai, axis=-3, keepdim=True)
                 elif self.mode == "rgb":
-                    Ai = hsi_to_rgb(Ai, self.lam, tensor_ordering=True, normalize=False)
+                    Ai = hsi_to_rgb(
+                        Ai, self.lam, tensor_ordering=True, raw=True, normalize=False
+                    )
+                elif self.mode == "rgb3":
+                    Ai = hsi_to_rgb(
+                        Ai, self.lam, tensor_ordering=True, raw=False, normalize=False
+                    )
+
                 A[i] = Ai
             A = A * self.subcrop_mask[None, None]
 
@@ -2490,16 +2058,16 @@ class DiffSSI(DDIM_Sampler):
         else:
             mhsi = x0_resc
 
-        if self.mode == "rgb":
-            meas = hsi_to_rgb(
-                mhsi,
-                self.lam,
-                tensor_ordering=True,
-                normalize=False,
-            )
-        elif self.mode == "gs":
+        if self.mode == "gs":
             meas = torch.sum(mhsi, dim=-3, keepdim=True)
-
+        elif self.mode == "rgb":
+            meas = hsi_to_rgb(
+                mhsi, self.lam, tensor_ordering=True, raw=True, normalize=False
+            )
+        elif self.mode == "rgb3":
+            meas = hsi_to_rgb(
+                mhsi, self.lam, tensor_ordering=True, raw=False, normalize=False
+            )
         meas = meas * self.subcrop_mask
 
         if not self.patch_normalize:
@@ -2522,3 +2090,440 @@ class DiffSSI(DDIM_Sampler):
             return losses, x0, cps
 
         return losses, x0
+
+
+# class DiffSSIV2(DDIM_Sampler):
+#     def __init__(
+#         self,
+#         diffusion_model,
+#         n_steps,
+#         ddim_scheme="uniform",
+#         ddim_eta=1.0,
+#         gtstart=999,
+#         gtend=0,
+#         gloop=10,
+#         gscale=1,
+#         kernel=None,
+#         kernel_path=None,
+#         kernel_key=None,
+#         mode="gs",
+#         patch_normalize=True,
+#         patch_scale_guidance=True,
+#         sub_crop=False,
+#         lam=None,
+#         guidance_loss="L2",
+#     ):
+#         super().__init__(diffusion_model, n_steps, ddim_scheme, ddim_eta)
+#         assert mode in ["rgb", "gs"], "mode must be 'rgb' or 'gs'."
+#         if kernel_path is not None:
+#             assert kernel is None, "If kernel_path is provided, do not pass in a kernel"
+#             assert (
+#                 kernel_key is not None
+#             ), "dictionary key name corresponding to kernel must be provided."
+#             with open(kernel_path, "rb") as f:
+#                 data = pickle.load(f)
+#                 kernel = data[kernel_key]
+#                 kernel = kernel[None] / np.max(kernel)
+#         if kernel is not None:
+#             assert len(kernel.shape) == 4, "Expected kernel of shape [1, C, H, W]"
+#             self.kernel = torch.tensor(kernel, dtype=torch.float32, device="cuda")
+#         else:
+#             self.kernel = None
+#         if mode == "rgb":
+#             assert lam is not None, "Lambda must be provided for rgb mode."
+
+#         self.lam = lam
+#         self.sub_crop = sub_crop
+#         self.mode = mode
+#         self.gloop = gloop
+#         self.gscale = gscale
+#         self.gtstart = gtstart
+#         self.gtend = gtend
+#         self.variance_n = None
+#         self.batch_size = None
+#         self.patch_normalize = patch_normalize
+#         self.patch_scale_guidance = patch_scale_guidance
+#         self.orig_clamp = True
+#         self.guidance_loss = guidance_loss
+
+#     def sample(
+#         self,
+#         measurement,
+#         variance_n=1,
+#         split_n=None,
+#         return_intermediate=False,
+#         x_start=None,
+#         patch_size=[64, 64],
+#         stride_size=None,
+#         use_guidance=True,
+#         xcond=None,
+#         rescale_return=True,
+#         boundary_crop=0,
+#         diffusion_batching=None,
+#     ):
+#         assert len(measurement.shape) == 3, "measurement should be rank 3"
+#         if not torch.is_tensor(measurement):
+#             measurement = torch.tensor(measurement)
+#         measurement = measurement.to(dtype=torch.float32, device="cuda")
+#         self.measurement = measurement
+
+#         # Get a boundary crop mask for large image divisions
+#         H, W = measurement.shape[-2:]
+#         self.subcrop_mask = torch.zeros((1, H, W), dtype=torch.float32, device="cuda")
+#         self.subcrop_mask[
+#             :,
+#             boundary_crop : H - boundary_crop,
+#             boundary_crop : W - boundary_crop,
+#         ] = 1.0
+
+#         split_n = variance_n if split_n is None else int(split_n)
+#         assert len(patch_size) == 2, "patchsize should be [h, w]"
+#         h, w = measurement.shape[-2:]
+#         ch = self.diffusion_model._seed_channels
+#         sh, sw = patch_size
+#         assert (
+#             h % sh == 0 and w % sw == 0
+#         ), "Height and width must be perfectly divisible by sh and sw"
+
+#         ccond, ccond_pn, g = self._forward_img2patch(
+#             measurement, patch_size, stride_size
+#         )
+#         batch_size = ccond.shape[0]  # number patches
+
+#         if x_start is None:
+#             x_start = torch.randn(
+#                 (
+#                     variance_n * batch_size,
+#                     ch,
+#                     *patch_size,
+#                 ),
+#                 dtype=torch.float32,
+#                 device="cuda",
+#             )
+#         else:
+#             x_start = x_start.to(dtype=torch.float32, device="cuda")
+
+#         # ccond = self.diffusion_model.ccond_stage_model(ccond)
+#         ccond = self.diffusion_model.reshape_batched_variance(ccond, variance_n)
+#         ccond_pn = self.diffusion_model.reshape_batched_variance(ccond_pn, variance_n)
+
+#         if xcond is not None:
+#             xcond = xcond.to(dtype=torch.float32, device="cuda")[None]
+#             xcond = (xcond * 2) - 1
+#             xcond = self.diffusion_model.xcond_stage_model(xcond).detach()
+#             xcond = torch.tile(xcond, [ccond.shape[0], 1])
+
+#         self.batch_size = batch_size
+#         self.g = g
+#         self.patch_size = patch_size
+#         self.stride_size = stride_size
+#         self.variance_n = split_n
+
+#         # Allow splitting of variance sampled draws into subgroups
+#         rep_calc = variance_n // split_n
+#         total_steps = self.n_steps if return_intermediate else 1
+#         imgs = torch.zeros((total_steps, variance_n, ch, h, w), device="cpu")
+#         x0s = torch.zeros((total_steps, variance_n, ch, h, w), device="cpu")
+#         self.hold_losses = []
+#         for repi in range(rep_calc):
+#             ilow = repi * split_n * batch_size
+#             ihigh = (repi + 1) * split_n * batch_size
+#             if diffusion_batching is None:
+#                 self.diffusion_batching = int(ihigh - ilow)
+#             else:
+#                 self.diffusion_batching = int(diffusion_batching)
+
+#             im = x_start[ilow:ihigh]
+#             use_ccond = ccond[ilow:ihigh]
+#             use_ccond_pn = ccond_pn[ilow:ihigh]
+#             use_xcond = xcond[ilow:ihigh] if xcond is not None else None
+#             progress_bar = tqdm(
+#                 zip(reversed(range(self.n_steps)), reversed(self.ddim_times)),
+#                 total=self.n_steps,
+#                 desc="",
+#             )
+#             step_idx = 0
+
+#             for idx, i in progress_bar:
+#                 im, x0 = self.p_sample(
+#                     im,
+#                     torch.full((im.shape[0],), i, dtype=torch.long, device="cuda"),
+#                     torch.full((im.shape[0],), idx, dtype=torch.long, device="cuda"),
+#                     use_ccond,
+#                     use_ccond_pn,
+#                     use_xcond,
+#                     use_guidance,
+#                 )
+
+#                 if (i == 0) or return_intermediate:
+#                     im_ = im.clone().detach()
+#                     x0_ = x0.clone().detach()
+
+#                     ## Apply LSQ patch scaling
+#                     if rescale_return:
+#                         _, im_ = self._guidance_step(im_)
+#                         _, x0_ = self._guidance_step(x0_)
+
+#                     im_ = self._reverse_patch2img(im_, split_n, batch_size)
+#                     x0_ = self._reverse_patch2img(x0_, split_n, batch_size)
+
+#                     imgs[step_idx, split_n * repi : split_n * (repi + 1)] = im_.cpu()
+#                     x0s[step_idx, split_n * repi : split_n * (repi + 1)] = x0_.cpu()
+#                     step_idx += 1
+
+#                 progress_bar.set_description(f"Index {idx}, Time: {i}")
+
+#         np_hold_losses = np.concatenate(self.hold_losses, axis=1)
+#         np_hold_losses = rearrange(
+#             np_hold_losses,
+#             "g (t s) -> (g s) t",
+#             g=split_n,
+#             s=variance_n // split_n,
+#             # np_hold_losses, "(g t) s -> t (g s)", g=variance_n // split_n, s=split_n
+#         )
+#         return imgs.numpy(), x0s.numpy(), np_hold_losses
+
+#     def p_sample(self, x_t, t, ti, ccond, ccond_pn, xcond, use_guidance):
+#         ### Collect coefficients
+#         sqrt_one_minus_alphas_cumprod_t = extract(
+#             self.sqrt_one_minus_alphas_cumprod, ti, x_t.shape
+#         )
+#         sqrt_recip_alphas_cumprod_t = extract(
+#             self.sqrt_recip_alphas_cumprod, ti, x_t.shape
+#         )
+#         sqrt_alpha_cumprod_prev_t = torch.sqrt(
+#             extract(self.alphas_cumprod_prev, ti, x_t.shape)
+#         )
+#         ddim_coeff_t = extract(self.ddim_coeff, ti, x_t.shape)
+#         ddim_sigma_t = extract(self.ddim_sigma, ti, x_t.shape)
+
+#         ### Get noise/score
+#         with torch.no_grad():
+#             ccond_ = ccond_pn if self.patch_normalize else ccond
+#             model_output = self.batched_model_inference(x_t, ccond_, t, xcond)
+
+#         if self.prediction_type == "epsilon":
+#             epsilon = model_output
+#         elif self.prediction_type == "start_x":
+#             sqrt_alphas_cumprod_t = torch.sqrt(
+#                 extract(self.alphas_cumprod, ti, x_t.shape)
+#             )
+#             epsilon = (
+#                 x_t - model_output * sqrt_alphas_cumprod_t
+#             ) / sqrt_one_minus_alphas_cumprod_t
+#         else:
+#             raise ValueError("Unsupported model prediction type.")
+
+#         xtp = x_t.clone()
+#         time = t.flatten()[0]
+#         if use_guidance and time <= self.gtstart and time >= self.gtend:
+#             use_gloop = self.gloop
+#             xtp.requires_grad_(True)
+
+#             for _ in range(use_gloop):
+#                 if xtp.grad is not None:
+#                     xtp.grad.zero_()
+
+#                 ccond_ = ccond_pn if self.patch_normalize else ccond
+#                 model_output = self.batched_model_inference(xtp, ccond_, t, xcond)
+
+#                 if self.prediction_type == "epsilon":
+#                     x0 = (
+#                         xtp - sqrt_one_minus_alphas_cumprod_t * model_output
+#                     ) * sqrt_recip_alphas_cumprod_t
+#                 elif self.prediction_type == "start_x":
+#                     x0 = model_output
+
+#                 # losses, _ = self._guidance_step(x0)
+#                 losses, _ = checkpoint(self._guidance_step, x0)
+#                 loss = torch.sum(losses)
+#                 loss.backward()
+
+#                 with torch.no_grad():
+#                     xtp -= self.gscale * xtp.grad / torch.norm(xtp.grad)
+#                     xtp = xtp.detach().requires_grad_(True)
+
+#                 torch.cuda.empty_cache()
+
+#             xtp = xtp.detach()
+
+#         ### Get x0hat and Compute DDIM Step
+#         pred_xstart = (
+#             xtp - sqrt_one_minus_alphas_cumprod_t * epsilon
+#         ) * sqrt_recip_alphas_cumprod_t
+#         pred_xstart = torch.clamp(pred_xstart, -1, 1)
+
+#         nonzero_mask = (1 - (t == 0).float()).reshape(
+#             x_t.shape[0], *((1,) * (len(x_t.shape) - 1))
+#         )
+#         noise = torch.randn_like(x_t)
+#         xtm1 = (
+#             sqrt_alpha_cumprod_prev_t * pred_xstart
+#             + ddim_coeff_t * epsilon
+#             + nonzero_mask * ddim_sigma_t * noise
+#         )
+
+#         # Save the projection loss for reference
+#         losses, _ = self._guidance_step(pred_xstart)
+#         self.hold_losses.append(losses[:, None].detach().cpu().numpy())
+#         return xtm1, pred_xstart
+
+#     def batched_model_inference(self, x_t, ccond, t, xcond):
+#         b = self.diffusion_batching
+#         n = x_t.shape[0]
+#         outputs = []
+
+#         for i in range(0, n, b):
+#             end = min(i + b, n)
+#             batch_x_t = x_t[i:end]
+#             batch_ccond = ccond[i:end]
+#             batch_t = t[i:end]
+#             batch_xcond = xcond[i:end] if xcond is not None else None
+
+#             batch_input = torch.cat((batch_x_t, batch_ccond), dim=1)
+#             batch_output = self.diffusion_model.model(
+#                 batch_input, batch_t, context=batch_xcond
+#             )
+
+#             outputs.append(batch_output)
+
+#         return torch.cat(outputs, dim=0)
+
+#     def _forward_img2patch(self, ccond, patch_size, stride_size):
+#         ccond = ccond / torch.amax(ccond)
+#         ccond, g = split_patches(ccond, patch_size, stride_size)
+
+#         ccond_pn = ccond / torch.amax(ccond, axis=(-1, -2, -3), keepdim=True)
+#         ccond_pn = (ccond_pn * 2) - 1
+#         ccond = (ccond * 2) - 1
+
+#         return ccond, ccond_pn, g
+
+#     def _reverse_patch2img(self, hsi, v, b):
+#         # hsi = rearrange(hsi, "(v b) c h w -> b v c h w", v=v, b=b)
+#         hsi = combine_patches(hsi, self.g, self.patch_size, self.stride_size)
+#         # if self.orig_clamp:
+#         #     hsi = torch.clamp(hsi, -1, 1)
+#         # else:
+#         #     hsi = torch.clamp(hsi, -1, 1e3)
+#         # hsi = (hsi + 1) / 2
+#         # hsi = hsi / torch.amax(hsi, axis=(-1, -2, -3), keepdim=True)
+#         return hsi
+
+#     def _guidance_step(self, x0):
+#         measurement = self.measurement * self.subcrop_mask[None]
+#         x0 = rearrange(
+#             x0, "(v b) c h w -> b v c h w", v=self.variance_n, b=self.batch_size
+#         )
+#         x0 = torch.clamp(x0, -1, 1)
+#         x0 = (x0 + 1) / 2
+
+#         if self.patch_normalize:
+#             # x0 = self._patch_normalize(x0)
+#             x0 = checkpoint(self._patch_normalize, x0)
+
+#         ###
+#         g = self.g
+#         ch = 3 if self.mode == "rgb" else 1
+#         py, px = self.patch_size[-2:]
+#         if self.kernel is not None:
+#             ys, xs = self.kernel.shape[-2] // 2, self.kernel.shape[-1] // 2
+#         else:
+#             ys, xs = 0, 0
+#         fh = measurement.shape[-2] + 2 * ys
+#         fw = measurement.shape[-1] + 2 * xs
+#         meas = torch.zeros(
+#             size=(x0.shape[1], ch, fh, fw), dtype=torch.float32, device="cuda"
+#         )
+
+#         for pi in range(x0.shape[0]):
+#             if self.kernel is not None:
+#                 out = general_convolve(x0[pi], self.kernel, rfft=True, mode="full")
+#             else:
+#                 out = x0[pi]
+
+#             if self.mode == "gs":
+#                 out = torch.sum(out, axis=-3, keepdim=True)
+#             elif self.mode == "rgb":
+#                 out = hsi_to_rgb(out, self.lam, tensor_ordering=True, normalize=False)
+
+#             ri, ci = divmod(pi, g[-1])
+#             meas[
+#                 :,
+#                 :,
+#                 ri * py : (ri * py + py + 2 * ys),
+#                 ci * px : (ci * px + px + 2 * xs),
+#             ] = (
+#                 meas[
+#                     :,
+#                     :,
+#                     ri * py : (ri * py + py + 2 * ys),
+#                     ci * px : (ci * px + px + 2 * xs),
+#                 ]
+#                 + out
+#             )
+
+#         meas = meas[:, :, ys:-ys, xs:-xs] if self.kernel is not None else meas
+#         meas = meas * self.subcrop_mask[None]
+
+#         if not self.patch_normalize:
+#             # TODO: Should swap this to mean
+#             meas = meas / torch.amax(meas, dim=(-1, -2, -3), keepdim=True)
+#             measurement = measurement / torch.max(measurement)
+
+#         if self.guidance_loss == "L2":
+#             losses = torch.sum((measurement - meas) ** 2, axis=(-1, -2, -3))
+#         elif self.guidance_loss == "L1":
+#             losses = torch.sum(torch.abs(measurement - meas), axis=(-1, -2, -3))
+#         else:
+#             raise ValueError("unknown guidance loss ")
+
+#         return losses, x0
+
+#     def _patch_normalize(self, x0):
+#         g = self.g
+#         measurement = self.measurement * self.subcrop_mask
+#         ch = 3 if self.mode == "rgb" else 1
+#         py, px = self.patch_size[-2:]
+
+#         if self.kernel is not None:
+#             ys, xs = self.kernel.shape[-2] // 2, self.kernel.shape[-1] // 2
+#         else:
+#             ys, xs = 0, 0
+#         fh = measurement.shape[-2] + 2 * ys
+#         fw = measurement.shape[-1] + 2 * xs
+#         A = torch.zeros(
+#             size=(*x0.shape[0:2], ch, fh, fw), dtype=torch.float32, device="cuda"
+#         )
+
+#         for pi in range(x0.shape[0]):
+#             if self.kernel is not None:
+#                 out = general_convolve(x0[pi], self.kernel, rfft=True, mode="full")
+#             else:
+#                 out = x0[pi]
+
+#             if self.mode == "gs":
+#                 out = torch.sum(out, axis=-3, keepdim=True)
+#             elif self.mode == "rgb":
+#                 out = hsi_to_rgb(out, self.lam, tensor_ordering=True, normalize=False)
+
+#             ri, ci = divmod(pi, g[-1])
+#             A[
+#                 pi,
+#                 :,
+#                 :,
+#                 ri * py : (ri * py + py + 2 * ys),
+#                 ci * px : (ci * px + px + 2 * xs),
+#             ] = out
+#         A = A[:, :, :, ys:-ys, xs:-xs] if self.kernel is not None else A
+#         A = A * self.subcrop_mask
+
+#         cps = []
+#         for vi in range(A.shape[1]):
+#             Ai = A[:, vi].reshape(x0.shape[0], -1).T
+#             cp = torch.inverse(Ai.T @ Ai) @ Ai.T @ measurement.flatten()
+#             cps.append(cp)
+#         cps = torch.stack(cps).T
+
+#         x0 = x0 * cps[:, :, None, None, None].to(torch.float32)
+#         return x0

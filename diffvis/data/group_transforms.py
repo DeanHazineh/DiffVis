@@ -16,7 +16,7 @@ reverse_transform = transforms.Compose(
 )
 
 
-def permute_dimensions(datsa):
+def permute_dimensions(data):
     if isinstance(data, torch.Tensor):
         data = data.cpu().numpy()
     data = np.swapaxes(np.swapaxes(data, -3, -1), -3, -2)

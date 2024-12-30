@@ -1,5 +1,6 @@
+# This code is not used in this repository but is kept as an archive
 import os
-import itertools  # NEVER USE ITERTOOLS.CYCLE ON TRAINING DATA WITH RANDOM AUGMENTATIONS
+import itertools
 import shutil
 import time
 import torch

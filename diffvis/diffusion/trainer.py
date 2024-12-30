@@ -502,8 +502,8 @@ class Trainer_HSI(Trainer):
         # Plot the images in RGB space
         bs, chs = samples.shape[0], samples.shape[1]
         numl = 8
-        # lam = np.linspace(400e-9, 700e-9, chs)
-        lam = np.linspace(450e-9, 650e-9, chs)
+        lam = np.linspace(400e-9, 700e-9, chs)
+        # lam = np.linspace(450e-9, 650e-9, chs)
 
         wlidx = np.linspace(0, chs - 1, numl).astype(int)
         rgb_samples = hsi_to_rgb(hsi_est, lam)

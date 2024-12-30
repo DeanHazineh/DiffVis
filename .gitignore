@@ -1,7 +1,11 @@
-**__pycache__
+**__pycache__**
 **diffvis.egg-info
-**out
-build/*
+**build**
+**out**
+**.h5
+**.mat
+**.pickle
+**.ckpt
+**.png
 
-scripts/data_files/*.pickle
-scripts/DFlat/*
+scripts/make_figures**

@@ -4,7 +4,10 @@ import torch
 
 
 def initialize_training(
-    config_path, model_ckpt_path=None, override_train_maxsteps=None
+    config_path,
+    model_ckpt_path=None,
+    override_train_maxsteps=None,
+    override_eager=False,
 ):
     config = OmegaConf.load(config_path)
 
@@ -13,6 +16,11 @@ def initialize_training(
     config_valid_dat = (
         config.valid_dataset if "valid_dataset" in config.keys() else None
     )
+
+    ## used for quick testing:
+    if override_eager:
+        config_train_dat.params.eager_mode = False
+        config_valid_dat.params.eager_mode = False
 
     # Instantiate the model
     model = initialize_diffusion_model(config_path, model_ckpt_path)
@@ -42,6 +50,7 @@ def initialize_training(
     return trainer
 
 
+# The weighted training is not used in this version
 def initialize_scale_training(config_path, model_ckpt_path=None):
     config = OmegaConf.load(config_path)
 
