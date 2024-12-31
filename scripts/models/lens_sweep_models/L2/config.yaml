@@ -1,0 +1,109 @@
+model:
+  target: diffvis.diffusion.ddpm.DDPM
+  params:
+    noise_channels: 31
+    input_key: "hsi"
+    xcond_key: "context"
+    ccond_key: "mgs"
+    use_xcond: False
+    use_ccond: True
+    use_cfg: False
+    timesteps: 1000
+    beta_schedule: "quadratic"
+    linear_start: 0.0015
+    linear_end: 0.0195
+    loss_type: "l1"
+    unet_trainable: True
+    xcond_stage_trainable: False
+    ccond_stage_trainable: False
+    prediction_type: "epsilon"
+    variance_type: "fixed_small"
+    kmin_snr: 5.0
+    use_min_snr: True
+
+    ccond_stage_config:
+      target: "__is_identity__"
+
+    xcond_stage_config:
+      target: "__is_unconditional__"
+
+    unet_config:
+      target: diffvis.diffusion.unet.UNetModelX
+      ckpt_path: None
+      params:
+        input_size: [64, 64]
+        in_channels: 32
+        out_channels: 31
+        num_res_blocks: 1
+        res_use_conv: False
+        time_embed_dim: 1024
+        use_scale_shift_norm: False
+        block_in_channels:
+          - 64
+          - 128
+          - 256
+          - 512
+          - 512
+        attn:
+          - True
+          - True
+          - True
+          - True
+          - True
+        attn_on_upsample: True
+        attn_head_dim: 32
+        group_norm_num: 32
+        ds_use_conv: True
+        dropout: 0.0
+        use_checkpoint: False
+        use_crossattention: False
+        use_spatial_transformer: False
+        context_dim: 0
+        use_xformer: True
+
+trainer:
+  target: diffvis.diffusion.trainer.Trainer_HSI
+  params:
+    ckpt_path: "/home/deanhazineh/ssd4tb_mounted/DiffVis/scripts/models/lens_sweep_models/L2/"
+    batch_size: 64
+    max_steps: 25000
+    lr: 1e-4
+    exp_decay_lr: 1e-6
+    gradient_accumulation_steps: 1
+    snapshot_every_n: 250
+    sample_img_size: [64, 64]
+    disp_num_samples: 8
+    save_intermediate_ckpt: False
+    start_clean: False
+    skip_params: []
+    dl_workers: 1
+    dl_pin_mem: True
+    skip_valid_step: False
+    load_optimizer: True
+    valid_every_n: 1
+
+train_dataset:
+  target: diffvis.data.metavis.Metadiff
+  params:
+    root_dir: "/home/deanhazineh/ssd4tb_mounted/DiffVis/scripts/datasets/metalens_prerendered/prerendered_L2_256/"
+    patchsize: 64
+    patch_normalize: True
+    scale_shift_preprocess: True
+    data_fields: ["mgs", "hsi"]
+    eager_mode: True
+    use_aug: True
+    include: ["ARAD_train"]
+    dtype: "float32"
+
+valid_dataset:
+  target: diffvis.data.metavis.Metadiff
+  params:
+    root_dir: "/home/deanhazineh/ssd4tb_mounted/DiffVis/scripts/datasets/metalens_prerendered/prerendered_L2_256/"
+    patchsize: 64
+    patch_normalize: True
+    scale_shift_preprocess: True
+    data_fields: ["mgs", "hsi"]
+    eager_mode: True
+    use_aug: False
+    include: ["ARAD_valid"]
+    dtype: "float32"
