@@ -1,0 +1,1 @@
+These files are generated using the generate_metasurface.ipynb notebook for the different configurations
