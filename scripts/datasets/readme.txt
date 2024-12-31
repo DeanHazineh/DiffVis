@@ -1,0 +1,2 @@
+Generate using the included code files. For convolution, we prerender the data using the metasurface PSFs. For CASSI, it is fast to render on the fly. 
+You need access to the original ARAD1k, ICVL, CAVE, and KAIST Dataset to run all tests.
