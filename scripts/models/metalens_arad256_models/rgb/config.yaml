@@ -64,10 +64,10 @@ model:
 trainer:
   target: diffvis.diffusion.trainer.Trainer_HSI
   params:
-    ckpt_path: "/home/deanhazineh/ssd4tb_mounted/DiffVis/scripts/models/metalens_arad256_models/rgb/"
-    #ckpt_path: "/n/home13/dhazineh/out/rgb/"
+    #ckpt_path: "/home/deanhazineh/Research/opt_spec/run/diffusion/ARAD_256_gen2_Models/redo_rgb/rgb/"
+    ckpt_path: "/n/home13/dhazineh/out/rgb/"     
     batch_size: 64
-    max_steps: 35000
+    max_steps: 50000
     lr: 1e-4
     exp_decay_lr: 1e-6
     gradient_accumulation_steps: 1
@@ -84,10 +84,10 @@ trainer:
     valid_every_n: 1
 
 train_dataset:
-  target: diffvis.data.metavis.Metadiff
+  target: diffvis.data.NewDat.metavis.Metadiff
   params:
-    root_dir: "/home/deanhazineh/ssd4tb_mounted/DiffVis/scripts/datasets/metalens_prerendered/prerendered_L4s_256/"
-    #root_dir: "/n/capasso_lab/Users/dhazineh/prerendered_gen2_256_v2/"
+    #root_dir: "/home/deanhazineh/ssd4tb_mounted/DiffVis/ARAD1k_Dataset/Prerendered/prerendered_gen2_256_v2/"
+    root_dir: "/n/capasso_lab/Users/dhazineh/prerendered_gen2_256_v2/"
     patchsize: 64
     patch_normalize: True
     scale_shift_preprocess: True
@@ -98,10 +98,10 @@ train_dataset:
     dtype: "float32"
 
 valid_dataset:
-  target: diffvis.data.metavis.Metadiff
+  target: diffvis.data.NewDat.metavis.Metadiff
   params:
-    root_dir: "/home/deanhazineh/ssd4tb_mounted/DiffVis/scripts/datasets/metalens_prerendered/prerendered_L4s_256/"
-    #root_dir: "/n/capasso_lab/Users/dhazineh/prerendered_gen2_256_v2/"
+    #root_dir: "/home/deanhazineh/ssd4tb_mounted/DiffVis/ARAD1k_Dataset/Prerendered/prerendered_gen2_256_v2/"
+    root_dir: "/n/capasso_lab/Users/dhazineh/prerendered_gen2_256_v2/"
     patchsize: 64
     patch_normalize: True
     scale_shift_preprocess: True
