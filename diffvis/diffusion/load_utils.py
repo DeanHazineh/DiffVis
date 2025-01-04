@@ -20,7 +20,6 @@ def initialize_training(
     ## used for quick testing:
     if override_eager:
         config_train_dat.params.eager_mode = False
-        config_valid_dat.params.eager_mode = False
 
     # Instantiate the model
     model = initialize_diffusion_model(config_path, model_ckpt_path)

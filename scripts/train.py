@@ -15,6 +15,7 @@ configs = [
     "/home/deanhazineh/ssd4tb_mounted/DiffVis/scripts/models/lens_sweep_models/L4v2/config.yaml",
     "/home/deanhazineh/ssd4tb_mounted/DiffVis/scripts/models/lens_sweep_models/L4s/config.yaml",
     "/home/deanhazineh/ssd4tb_mounted/DiffVis/scripts/models/lens_sweep_models/L8/config.yaml",
+    "/home/deanhazineh/ssd4tb_mounted/DiffVis/scripts/models/icvl_model/config.yaml",
 ]
 
 for config in configs:
