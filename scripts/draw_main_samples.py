@@ -85,7 +85,7 @@ for modeln, cond, mode in zip(modeln_list, cond_list, mode_list):
 
     fnames = natsorted(os.listdir(datpath))
     fnames = [f for f in fnames if "_valid" in f]
-    for f in fnames:
+    for f in fnames[:1]:
         f = f.strip(".mat")
         fid = f.strip("ARAD_valid_")
         outpath = savepath + f"{fid}.pickle"
@@ -101,7 +101,7 @@ for modeln, cond, mode in zip(modeln_list, cond_list, mode_list):
             mhsi,
             lam,
             tensor_ordering=True,
-            raw=True,
+            process="raw",
             projection="Basler_Bayer",
             normalize=True,
         )
@@ -109,7 +109,7 @@ for modeln, cond, mode in zip(modeln_list, cond_list, mode_list):
             hsi,
             lam,
             tensor_ordering=True,
-            raw=True,
+            process="raw",
             projection="Basler_Bayer",
             normalize=True,
         )
@@ -117,7 +117,7 @@ for modeln, cond, mode in zip(modeln_list, cond_list, mode_list):
             mhsi,
             lam,
             tensor_ordering=True,
-            raw=False,
+            process="ideal",
             projection="Basler_Bayer",
             normalize=True,
         )
@@ -125,7 +125,7 @@ for modeln, cond, mode in zip(modeln_list, cond_list, mode_list):
             hsi,
             lam,
             tensor_ordering=True,
-            raw=False,
+            process="ideal",
             projection="Basler_Bayer",
             normalize=True,
         )

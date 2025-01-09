@@ -2032,11 +2032,19 @@ class DiffSSI(DDIM_Sampler):
                     Ai = torch.sum(Ai, axis=-3, keepdim=True)
                 elif self.mode == "rgb":
                     Ai = hsi_to_rgb(
-                        Ai, self.lam, tensor_ordering=True, raw=True, normalize=False
+                        Ai,
+                        self.lam,
+                        tensor_ordering=True,
+                        process="raw",
+                        normalize=False,
                     )
                 elif self.mode == "rgb3":
                     Ai = hsi_to_rgb(
-                        Ai, self.lam, tensor_ordering=True, raw=False, normalize=False
+                        Ai,
+                        self.lam,
+                        tensor_ordering=True,
+                        process="ideal",
+                        normalize=False,
                     )
 
                 A[i] = Ai
@@ -2062,11 +2070,11 @@ class DiffSSI(DDIM_Sampler):
             meas = torch.sum(mhsi, dim=-3, keepdim=True)
         elif self.mode == "rgb":
             meas = hsi_to_rgb(
-                mhsi, self.lam, tensor_ordering=True, raw=True, normalize=False
+                mhsi, self.lam, tensor_ordering=True, process="raw", normalize=False
             )
         elif self.mode == "rgb3":
             meas = hsi_to_rgb(
-                mhsi, self.lam, tensor_ordering=True, raw=False, normalize=False
+                mhsi, self.lam, tensor_ordering=True, process="ideal", normalize=False
             )
         meas = meas * self.subcrop_mask
 
