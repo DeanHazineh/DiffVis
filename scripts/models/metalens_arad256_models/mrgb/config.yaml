@@ -100,7 +100,7 @@ train_dataset:
 valid_dataset:
   target: diffvis.data.NewDat.metavis.Metadiff
   params:
-    root_dir: "/n/capasso_lab/Users/dhazineh/prerendered_gen2_256_v2/"       
+    root_dir: "/n/capasso_lab/Users/dhazineh/prerendered_gen2_256_v2/"
     #root_dir: "/home/deanhazineh/ssd4tb_mounted/DiffVis/ARAD1k_Dataset/Prerendered/prerendered_gen2_256_v2/"
     patchsize: 64
     patch_normalize: True

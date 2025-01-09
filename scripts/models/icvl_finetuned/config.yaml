@@ -4,7 +4,7 @@ model:
     noise_channels: 31
     input_key: "hsi"
     xcond_key: "context"
-    ccond_key: "mrgb3"
+    ccond_key: "mgs"
     use_xcond: False
     use_ccond: True
     use_cfg: False
@@ -32,7 +32,7 @@ model:
       ckpt_path: None
       params:
         input_size: [64, 64]
-        in_channels: 34
+        in_channels: 32
         out_channels: 31
         num_res_blocks: 1
         res_use_conv: False
@@ -65,10 +65,10 @@ trainer:
   target: diffvis.diffusion.trainer.Trainer_HSI
   params:
     #ckpt_path: "/home/deanhazineh/Research/opt_spec/run/diffusion/ARAD_256_gen2_Models/redo_rgb/mrgb/"
-    ckpt_path: "/n/home13/dhazineh/out/mrgb3/"
+    ckpt_path: "/n/home13/dhazineh/out/icvl_finetuned/"
     batch_size: 64
-    max_steps: 50000
-    lr: 1e-4
+    max_steps: 100000
+    lr: 1e-5
     exp_decay_lr: 1e-6
     gradient_accumulation_steps: 1
     snapshot_every_n: 250
@@ -84,29 +84,29 @@ trainer:
     valid_every_n: 1
 
 train_dataset:
-  target: diffvis.data.NewDat.metavis.Metadiff
+  target: diffvis.data.metavis.Metadiff
   params:
     #root_dir: "/home/deanhazineh/ssd4tb_mounted/DiffVis/ARAD1k_Dataset/Prerendered/prerendered_gen2_256_v2/"
-    root_dir: "/n/capasso_lab/Users/dhazineh/prerendered_gen2_256_v2/"
+    root_dir: "/n/capasso_lab/Users/dhazineh/datasets/ICVL_prerendered/"
     patchsize: 64
     patch_normalize: True
     scale_shift_preprocess: True
-    data_fields: ["mrgb3", "hsi"]
-    eager_mode: True
+    data_fields: ["mgs", "hsi"]
+    eager_mode: False
     use_aug: True
-    include: ["ARAD_train"]
+    include: ["ICVL_train"]
     dtype: "float32"
 
 valid_dataset:
-  target: diffvis.data.NewDat.metavis.Metadiff
+  target: diffvis.data.metavis.Metadiff
   params:
-    root_dir: "/n/capasso_lab/Users/dhazineh/prerendered_gen2_256_v2/"
+    root_dir: "/n/capasso_lab/Users/dhazineh/datasets/ICVL_prerendered/"       
     #root_dir: "/home/deanhazineh/ssd4tb_mounted/DiffVis/ARAD1k_Dataset/Prerendered/prerendered_gen2_256_v2/"
     patchsize: 64
     patch_normalize: True
     scale_shift_preprocess: True
-    data_fields: ["mrgb3", "hsi"]
-    eager_mode: True
-    use_aug: False
-    include: ["ARAD_valid"]
+    data_fields: ["mgs", "hsi"]
+    eager_mode: False
+    use_aug: True
+    include: ["ICVL_test"]
     dtype: "float32"

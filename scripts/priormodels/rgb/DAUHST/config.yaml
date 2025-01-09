@@ -1,0 +1,63 @@
+model:
+  target: diffvis.priormodels.model_wrapper.ModelWrapper
+  params:
+    input_key: "hsi"
+    xcond_key: "context"
+    ccond_key: "rgb3"
+    trainable: True
+    loss: "RMSE"
+    network_config:
+      target: PriorModels.architecture.DAUHST.DAUHST
+      ckpt_path: None
+      params:
+        kernel_path: "/home/deanhazineh/ssd4tb_mounted/DiffVis/scripts/metasurfaces/L4s_lens_psf_compact32.pickle"
+        num_iterations: 1
+        dimin: 3
+        dim: 31
+        mode: "rgb"
+
+trainer:
+  target: diffvis.diffusion.trainer.Trainer_HSI_NonDiffusion
+  params:
+    ckpt_path: "/home/deanhazineh/ssd4tb_mounted/DiffVis/scripts/priormodels/rgb/DAUHST/"
+    batch_size: 8
+    max_steps: 500
+    lr: 4e-4
+    exp_decay_lr: 1e-6
+    gradient_accumulation_steps: 1
+    snapshot_every_n: 25
+    sample_img_size: [256, 256]
+    disp_num_samples: 5
+    save_intermediate_ckpt: False
+    start_clean: False
+    skip_params: []
+    dl_workers: 1
+    dl_pin_mem: True
+    skip_valid_step: False
+    load_optimizer: False
+
+train_dataset:
+  target: diffvis.data.NewDat.metavis.Metadiff
+  params:
+    root_dir: "/home/deanhazineh/ssd4tb_mounted/DiffVis/scripts/datasets/metalens_prerendered/prerendered_L4s_256/"
+    patchsize: 256
+    patch_normalize: True
+    scale_shift_preprocess: False
+    data_fields: ["rgb3", "hsi"]
+    eager_mode: True
+    use_aug: True
+    include: ["ARAD_train"]
+    dtype: "float32"
+
+valid_dataset:
+  target: diffvis.data.NewDat.metavis.Metadiff
+  params:
+    root_dir: "/home/deanhazineh/ssd4tb_mounted/DiffVis/scripts/datasets/metalens_prerendered/prerendered_L4s_256/"
+    patchsize: 256
+    patch_normalize: True
+    scale_shift_preprocess: False
+    data_fields: ["rgb3", "hsi"]
+    eager_mode: True
+    use_aug: False
+    include: ["ARAD_valid"]
+    dtype: "float32"
