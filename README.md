@@ -1,7 +1,6 @@
-<h1 align="center">Grayscale to Hyperspectral at Any Resolution Using A Phase-Only Lens (In Progress of Uploading)</h1>
+<h1 align="center"> Grayscale to Hyperspectral at Any Resolution Using A Phase-Only Lens</h1>
 
 <h2> This page is in development. Files will be added and modified. This is an early access. </h2>
-
 <p align="center">
   <a href="https://deanhazineh.github.io/publications/DiffVis/diffvis_home.html">
     <img src="https://img.shields.io/badge/Project-Website-blue?style=for-the-badge" alt="Project Page">
@@ -10,6 +9,9 @@
     <img src="https://img.shields.io/badge/ArXiv-Paper-red?style=for-the-badge" alt="ArXiv Paper">
   </a>
 </p>
+
+This work explores the inverse problem of reconstructing a hyperspectral image from a single, blurry grayscale measurement captured on a filterless photosensor. Although challenging, this task is possible since a diffractive lens can encode hyperspectral information via chromatic abberration. 
+Previously, this task was largely unexplored and unsolved; however, we introduce a new model that is capable of reversing the forward measurement (shown below) to produce high-quality estimates. 
 
 <p align="center">
   <strong style="font-size:20px;">The Forward Measurement Model</strong>
