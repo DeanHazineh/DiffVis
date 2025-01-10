@@ -6,6 +6,7 @@ setup(
     packages=find_packages(),
     install_requires=[
         "dflat-opt==4.1.0",
+        "OpenEXR",
         "torch",
         "torchvision",
         "xformers",
