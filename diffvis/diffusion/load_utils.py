@@ -113,6 +113,7 @@ def instantiate_from_config(config_model, ckpt_path=None, strict=False):
     if not "target" in config_model:
         raise KeyError("Expected key `target` to instantiate.")
     target_str = config_model["target"]
+    print(target_str)
     loaded_module = get_obj_from_str(target_str)(**config_model.get("params", dict()))
 
     # Get model checkpoint

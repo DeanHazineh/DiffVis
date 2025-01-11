@@ -7,7 +7,7 @@ import numpy as np
 from scipy.io import loadmat
 from tqdm import tqdm
 
-from .group_transforms import *
+from diffvis.data.group_transforms import *
 
 
 def random_crop(hsi, crop_size):
@@ -164,3 +164,39 @@ class CASSI(Dataset):
         with h5py.File(h5file, "r") as hf:
             hsi = hf["hsi"]
             return random_crop(hsi, self.cropsize)
+
+
+if __name__ == "__main__":
+    import matplotlib.pyplot as plt
+    from dflat.render import hsi_to_rgb
+
+    dataset = CASSI(
+        root_dir="/home/deanhazineh/ssd4tb_mounted/DiffVis/scripts/datasets/CASSI_Dataset_450_650/",
+        cropsize=256,
+        patchsize=64,
+        maskpath="/home/deanhazineh/ssd4tb_mounted/DiffVis/scripts/datasets/mask.mat",
+        maskkey="mask",
+        use_aug=True,
+        eager_mode=False,
+        patch_normalize=True,
+        scale_shift_preprocess=True,
+        include=["ARAD_train", "CAVE_"],
+        mask_product=False,
+        dtype="float32",
+        catmask=True,
+        random_mask=False,
+    )
+
+    sample = dataset[0]
+    hsi = sample["hsi"]
+    mgs = sample["mgs"]
+    rmeas = sample["rmeas"]
+    mask = sample["mask"]
+    print(hsi.shape, mgs.shape)
+
+    # gt_rgb = hsi_to_rgb(reverse_transform(hsi), np.linspace(450e-9, 650e-9, 28))
+
+    # fig, ax = plt.subplots(1, 2)
+    # ax[0].imshow(gt_rgb)
+    # ax[1].imshow(reverse_transform(rmeas))
+    # plt.show()
